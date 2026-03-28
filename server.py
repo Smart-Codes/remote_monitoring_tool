@@ -1,5 +1,5 @@
 """
-Main Server Module - Optimized for Railway with Telegram Logging
+Main Server Module - Optimized for Railway with Telegram Logging and HTTP Healthcheck
 """
 
 import socket
@@ -12,6 +12,7 @@ import hashlib
 import subprocess
 import time
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Configuration
 DEBUG_MODE = True
@@ -23,6 +24,8 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 # Railway provides PORT environment variable
 PORT = int(os.environ.get('PORT', 5000))
 HOST = '0.0.0.0'
+TCP_PORT = PORT  # TCP port for client connections
+HTTP_PORT = PORT  # Use same port for HTTP (Railway will route to this)
 
 def hash_password(password):
     """Hash password with SHA256"""
@@ -167,8 +170,8 @@ def log_attempt(username, password, success, addr, command=None, output=None):
     except Exception as e:
         print(f"[!] File logging error: {e}")
 
-def handle_client(client, addr):
-    """Handle individual client connection"""
+def handle_tcp_client(client, addr):
+    """Handle individual TCP client connection"""
     try:
         # Set timeout
         client.settimeout(30)
@@ -187,7 +190,7 @@ def handle_client(client, addr):
             
         username, password = parts[0], parts[1]
         
-        print(f"\n[+] Login attempt from {addr[0]}")
+        print(f"\n[+] TCP Login attempt from {addr[0]}")
         print(f"[+] Username: '{username}'")
         
         # Authenticate
@@ -212,9 +215,8 @@ def handle_client(client, addr):
             print(system_info)
             print("="*50)
             
-            # For Railway, we'll use a default command since no interactive console
-            # You can send commands via Telegram later
-            command = "whoami"  # Default command
+            # Execute a default command
+            command = "whoami"
             
             print(f"\n[+] Executing default command: {command}")
             
@@ -256,78 +258,177 @@ def handle_client(client, addr):
         except:
             pass
 
-def start_server():
-    """Start the server on Railway"""
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """HTTP handler for health checks and status"""
+    
+    def do_GET(self):
+        """Handle GET requests"""
+        if self.path == '/' or self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            
+            status_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Remote Monitoring Server</title>
+                <style>
+                    body {{
+                        font-family: Arial, sans-serif;
+                        margin: 40px;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                    }}
+                    .container {{
+                        max-width: 800px;
+                        margin: auto;
+                        background: rgba(255,255,255,0.1);
+                        padding: 20px;
+                        border-radius: 10px;
+                    }}
+                    .status {{
+                        color: #4ade80;
+                        font-weight: bold;
+                    }}
+                    .info {{
+                        margin: 20px 0;
+                        padding: 10px;
+                        background: rgba(255,255,255,0.2);
+                        border-radius: 5px;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>🚀 Remote Monitoring Server</h1>
+                    <p>Status: <span class="status">🟢 ONLINE</span></p>
+                    <div class="info">
+                        <h3>Server Information:</h3>
+                        <p>📡 TCP Port: {TCP_PORT}</p>
+                        <p>🔐 Auth Method: JSON</p>
+                        <p>📊 Status: Running</p>
+                        <p>🤖 Telegram Logging: {'✅ Enabled' if TELEGRAM_BOT_TOKEN else '❌ Disabled'}</p>
+                    </div>
+                    <div class="info">
+                        <h3>How to Connect:</h3>
+                        <p>Use a TCP client to connect to this server on port {TCP_PORT}</p>
+                        <p>Credentials: Use admin/admin123 or user/password123</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            
+            self.wfile.write(status_html.encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"404 Not Found")
+    
+    def log_message(self, format, *args):
+        """Suppress HTTP server logs"""
+        pass
+
+def run_http_server():
+    """Run HTTP server for health checks"""
+    try:
+        server = HTTPServer((HOST, HTTP_PORT), HealthCheckHandler)
+        print(f"[✓] HTTP Healthcheck server running on {HOST}:{HTTP_PORT}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"[!] HTTP Server error: {e}")
+
+def run_tcp_server():
+    """Run TCP server for client connections"""
     max_retries = 5
     retry_delay = 10
     
     for attempt in range(max_retries):
         try:
-            print(f"\n[+] Starting server (attempt {attempt + 1}/{max_retries})...")
+            # Create TCP socket
+            tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            tcp_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            tcp_server.bind((HOST, TCP_PORT))
+            tcp_server.listen(5)
             
-            # Send startup message to Telegram
-            start_msg = f"""
-🚀 <b>Remote Monitoring Server Started</b>
-━━━━━━━━━━━━━━━━━━━━━━━
-🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-🌐 Host: {HOST}
-🔌 Port: {PORT}
-📊 Status: Online
-🔐 Auth: JSON
-            """
-            send_telegram_message(start_msg)
-            
-            # Print server info
-            print("\n" + "="*50)
-            print("  REMOTE MONITORING SERVER (Railway)")
-            print("="*50)
-            print(f"\n[+] Server Host: {HOST}")
-            print(f"[+] Port: {PORT}")
-            print(f"[+] Auth Method: JSON")
-            print(f"[+] Telegram Logging: {'Enabled' if TELEGRAM_BOT_TOKEN else 'Disabled'}")
-            print(f"[+] Allowed Commands: {', '.join(ALLOWED_COMMANDS)}")
-            
-            # Test users.json
-            users = load_users()
-            print(f"[+] Available users: {', '.join(users.keys())}")
-            print("="*50)
-            
-            # Create socket
-            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server.bind((HOST, PORT))
-            server.listen(5)
-            
-            print(f"\n[✓] Server listening on {HOST}:{PORT}")
+            print(f"[✓] TCP Server listening on {HOST}:{TCP_PORT}")
             print("[✓] Waiting for client connections...\n")
-            print("[!] Press Ctrl+C to stop the server\n")
             
-            # Main loop
+            # Main TCP loop
             while True:
                 try:
-                    client, addr = server.accept()
-                    print(f"[+] Connection from {addr}")
+                    client, addr = tcp_server.accept()
+                    print(f"[+] TCP Connection from {addr}")
                     
                     # Handle client in new thread
                     client_thread = threading.Thread(
-                        target=handle_client,
+                        target=handle_tcp_client,
                         args=(client, addr),
                         daemon=True
                     )
                     client_thread.start()
                 except Exception as e:
-                    print(f"[!] Error accepting connection: {e}")
+                    print(f"[!] Error accepting TCP connection: {e}")
                     continue
         
         except Exception as e:
-            print(f"\n[!] Server error on attempt {attempt + 1}: {e}")
+            print(f"\n[!] TCP Server error on attempt {attempt + 1}: {e}")
             if attempt < max_retries - 1:
                 print(f"[!] Retrying in {retry_delay} seconds...")
                 time.sleep(retry_delay)
             else:
                 print("[!] Max retries reached. Exiting...")
-                send_telegram_message(f"⚠️ <b>Server Failed to Start</b>\n{str(e)}")
                 sys.exit(1)
+
+def start_server():
+    """Start both HTTP and TCP servers"""
+    try:
+        # Send startup message to Telegram
+        start_msg = f"""
+🚀 <b>Remote Monitoring Server Started</b>
+━━━━━━━━━━━━━━━━━━━━━━━
+🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🌐 Host: {HOST}
+🔌 HTTP Port: {HTTP_PORT}
+🔌 TCP Port: {TCP_PORT}
+📊 Status: Online
+🔐 Auth: JSON
+        """
+        send_telegram_message(start_msg)
+        
+        # Print server info
+        print("\n" + "="*50)
+        print("  REMOTE MONITORING SERVER (Railway)")
+        print("="*50)
+        print(f"\n[+] Server Host: {HOST}")
+        print(f"[+] HTTP Port: {HTTP_PORT} (for health checks)")
+        print(f"[+] TCP Port: {TCP_PORT} (for client connections)")
+        print(f"[+] Auth Method: JSON")
+        print(f"[+] Telegram Logging: {'Enabled' if TELEGRAM_BOT_TOKEN else 'Disabled'}")
+        
+        # Test users.json
+        users = load_users()
+        print(f"[+] Available users: {', '.join(users.keys())}")
+        print("\n[!] Default credentials: admin/admin123, user/password123")
+        print("="*50)
+        print("\n[✓] Server is running!\n")
+        
+        # Start HTTP server in a separate thread
+        http_thread = threading.Thread(target=run_http_server, daemon=True)
+        http_thread.start()
+        
+        # Run TCP server in main thread
+        run_tcp_server()
+    
+    except KeyboardInterrupt:
+        print("\n\n[+] Server shutting down...")
+        send_telegram_message("🛑 <b>Server Shutting Down</b>")
+    except Exception as e:
+        error_msg = f"Server error: {str(e)}"
+        print(f"\n[!] {error_msg}")
+        send_telegram_message(f"⚠️ <b>Critical Error</b>\n{error_msg}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     start_server()
