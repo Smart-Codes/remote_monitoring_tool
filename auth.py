@@ -5,6 +5,7 @@ Authentication Module - Fixed for usernames with spaces
 import json
 import hashlib
 import subprocess
+import os
 from config import AUTH_METHOD, DEBUG_MODE
 
 def hash_password(password):
@@ -12,7 +13,9 @@ def hash_password(password):
 
 def load_users():
     try:
-        with open("users.json", "r") as f:
+        # Look for users.json in server directory
+        users_path = os.path.join(os.path.dirname(__file__), 'server', 'users.json')
+        with open(users_path, "r") as f:
             return json.load(f)
     except:
         return {}
@@ -27,7 +30,6 @@ def authenticate_windows(username, password):
             print(f"\n[Debug] Windows Auth - Testing: '{username}'")
         
         # PowerShell script with proper handling of spaces
-        # Use single quotes around username and password to handle spaces
         ps_script = f'''
         Add-Type -AssemblyName System.DirectoryServices.AccountManagement
         $context = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Machine)

@@ -4,13 +4,16 @@ Main Server Module - Optimized for Railway with Telegram Logging
 
 import socket
 import os
+import sys
 import subprocess
 import threading
 import requests
-import json
 from datetime import datetime
 from auth import authenticate, hash_password
 from config import DEBUG_MODE, ALLOWED_COMMANDS, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+# Add server directory to path for users.json
+sys.path.append(os.path.join(os.path.dirname(__file__), 'server'))
 
 # Railway provides PORT environment variable
 PORT = int(os.environ.get('PORT', 5000))
@@ -65,9 +68,12 @@ def log_attempt(username, password, success, addr, command=None, output=None):
     
     send_telegram_message(message)
     
-    # Also log to file for backup (Railway has ephemeral storage)
+    # Also log to file for backup
     try:
-        with open("logs.txt", "a") as f:
+        log_dir = os.path.join(os.path.dirname(__file__), 'server')
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, "logs.txt")
+        with open(log_file, "a") as f:
             f.write(f"{timestamp} | {username} | {password} | {addr[0]} | {status_text} | {command if command else 'N/A'}\n")
     except Exception as e:
         print(f"[!] File logging error: {e}")
@@ -114,14 +120,12 @@ def handle_client(client, addr):
             print(system_info)
             print("="*50)
             
-            # Get command from admin via Telegram or console
+            # Get command from admin
             print("\n" + "="*50)
             print("[AVAILABLE COMMANDS]")
             print(f"Allowed: {', '.join(ALLOWED_COMMANDS)}")
             print("="*50)
             
-            # For Railway, we'll use a simple console input
-            # You can also implement Telegram-based command control
             command = input("\nEnter command to execute: ").strip().lower()
             
             # Validate and execute command
