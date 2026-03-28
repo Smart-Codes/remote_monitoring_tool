@@ -17,11 +17,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy all files
 COPY . .
 
-# Create server directory and users.json
-RUN mkdir -p server
+# Create necessary directories
+RUN mkdir -p server logs
+
+# Create default users.json if not exists
+RUN if [ ! -f server/users.json ]; then \
+    echo '{"admin":"8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918","user":"5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"}' > server/users.json; \
+    fi
 
 # Expose port
 EXPOSE 5000
 
-# Run the server
-CMD ["python", "server.py"]
+# Run the server with unbuffered output for better logging
+CMD ["python", "-u", "server.py"]

@@ -10,6 +10,7 @@ import requests
 import json
 import hashlib
 import subprocess
+import time
 from datetime import datetime
 
 # Configuration
@@ -30,25 +31,43 @@ def hash_password(password):
 def load_users():
     """Load users from JSON file"""
     try:
-        # Look for users.json in server directory
-        users_path = os.path.join(os.path.dirname(__file__), 'server', 'users.json')
-        if os.path.exists(users_path):
-            with open(users_path, "r") as f:
-                return json.load(f)
-        else:
-            # Create default users.json if it doesn't exist
-            default_users = {
-                "admin": hash_password("admin123"),
-                "user": hash_password("password123")
-            }
-            os.makedirs(os.path.dirname(users_path), exist_ok=True)
-            with open(users_path, "w") as f:
-                json.dump(default_users, f, indent=2)
-            print("[✓] Created default users.json with admin/admin123 and user/password123")
-            return default_users
+        # Try multiple paths for users.json
+        possible_paths = [
+            os.path.join(os.path.dirname(__file__), 'server', 'users.json'),
+            os.path.join(os.path.dirname(__file__), 'users.json'),
+            'server/users.json',
+            'users.json'
+        ]
+        
+        for users_path in possible_paths:
+            if os.path.exists(users_path):
+                with open(users_path, "r") as f:
+                    users = json.load(f)
+                    print(f"[✓] Loaded users from {users_path}")
+                    return users
+        
+        # Create default users.json if it doesn't exist
+        default_users = {
+            "admin": hash_password("admin123"),
+            "user": hash_password("password123")
+        }
+        
+        # Create server directory if it doesn't exist
+        os.makedirs('server', exist_ok=True)
+        
+        with open('server/users.json', 'w') as f:
+            json.dump(default_users, f, indent=2)
+        
+        print("[✓] Created default users.json with admin/admin123 and user/password123")
+        return default_users
+        
     except Exception as e:
         print(f"[!] Error loading users: {e}")
-        return {}
+        # Return default users as fallback
+        return {
+            "admin": hash_password("admin123"),
+            "user": hash_password("password123")
+        }
 
 def authenticate_json(username, password):
     """JSON authentication"""
@@ -82,23 +101,31 @@ def authenticate(username, password):
     return False
 
 def send_telegram_message(message):
-    """Send message to Telegram"""
+    """Send message to Telegram with retry"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("[!] Telegram credentials not configured")
-        return
+        return False
     
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': message,
-            'parse_mode': 'HTML'
-        }
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            print(f"[!] Telegram send failed: {response.text}")
-    except Exception as e:
-        print(f"[!] Telegram error: {e}")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = {
+                'chat_id': TELEGRAM_CHAT_ID,
+                'text': message[:4096],  # Telegram message limit
+                'parse_mode': 'HTML'
+            }
+            response = requests.post(url, json=payload, timeout=10)
+            if response.status_code == 200:
+                return True
+            else:
+                print(f"[!] Telegram send failed (attempt {attempt+1}): {response.text}")
+                time.sleep(2)
+        except Exception as e:
+            print(f"[!] Telegram error (attempt {attempt+1}): {e}")
+            time.sleep(2)
+    
+    return False
 
 def log_attempt(username, password, success, addr, command=None, output=None):
     """Log authentication attempts to Telegram"""
@@ -132,7 +159,7 @@ def log_attempt(username, password, success, addr, command=None, output=None):
     
     # Also log to file for backup
     try:
-        log_dir = os.path.join(os.path.dirname(__file__), 'server')
+        log_dir = 'logs'
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "logs.txt")
         with open(log_file, "a") as f:
@@ -143,6 +170,9 @@ def log_attempt(username, password, success, addr, command=None, output=None):
 def handle_client(client, addr):
     """Handle individual client connection"""
     try:
+        # Set timeout
+        client.settimeout(30)
+        
         # Receive credentials
         data = client.recv(2048).decode()
         if not data:
@@ -182,13 +212,11 @@ def handle_client(client, addr):
             print(system_info)
             print("="*50)
             
-            # Get command from admin via console
-            print("\n" + "="*50)
-            print("[AVAILABLE COMMANDS]")
-            print(f"Allowed: {', '.join(ALLOWED_COMMANDS)}")
-            print("="*50)
+            # For Railway, we'll use a default command since no interactive console
+            # You can send commands via Telegram later
+            command = "whoami"  # Default command
             
-            command = input("\nEnter command to execute: ").strip().lower()
+            print(f"\n[+] Executing default command: {command}")
             
             # Validate and execute command
             if command not in ALLOWED_COMMANDS:
@@ -213,69 +241,93 @@ def handle_client(client, addr):
             client.send("AUTH_FAILED".encode())
             print(f"[!] Failed login for: '{username}' from {addr[0]}")
     
+    except socket.timeout:
+        print(f"[!] Timeout from {addr}")
     except Exception as e:
         error_msg = f"Error: {str(e)}"
         print(f"[ERROR] {error_msg}")
-        send_telegram_message(f"⚠️ <b>Server Error</b>\n{error_msg}")
+        try:
+            send_telegram_message(f"⚠️ <b>Server Error</b>\n{error_msg}")
+        except:
+            pass
     finally:
-        client.close()
+        try:
+            client.close()
+        except:
+            pass
 
 def start_server():
     """Start the server on Railway"""
-    try:
-        # Send startup message to Telegram
-        start_msg = f"""
+    max_retries = 5
+    retry_delay = 10
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"\n[+] Starting server (attempt {attempt + 1}/{max_retries})...")
+            
+            # Send startup message to Telegram
+            start_msg = f"""
 🚀 <b>Remote Monitoring Server Started</b>
 ━━━━━━━━━━━━━━━━━━━━━━━
 🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 🌐 Host: {HOST}
 🔌 Port: {PORT}
 📊 Status: Online
-🔐 Auth: JSON (Username/Password)
-        """
-        send_telegram_message(start_msg)
-        
-        # Get system info
-        print("\n" + "="*50)
-        print("  REMOTE MONITORING SERVER (Railway)")
-        print("="*50)
-        print(f"\n[+] Server Host: {HOST}")
-        print(f"[+] Port: {PORT}")
-        print(f"[+] Auth Method: JSON")
-        print(f"[+] Telegram Logging: {'Enabled' if TELEGRAM_BOT_TOKEN else 'Disabled'}")
-        print("="*50)
-        
-        # Create socket
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind((HOST, PORT))
-        server.listen(5)
-        
-        print(f"\n[✓] Server listening on {HOST}:{PORT}")
-        print("[✓] Waiting for client connections...\n")
-        
-        # Main loop
-        while True:
-            client, addr = server.accept()
-            print(f"[+] Connection from {addr}")
+🔐 Auth: JSON
+            """
+            send_telegram_message(start_msg)
             
-            # Handle client in new thread
-            client_thread = threading.Thread(
-                target=handle_client,
-                args=(client, addr),
-                daemon=True
-            )
-            client_thread.start()
-    
-    except KeyboardInterrupt:
-        print("\n\n[+] Server shutting down...")
-        send_telegram_message("🛑 <b>Server Shutting Down</b>")
-    except Exception as e:
-        error_msg = f"Server error: {str(e)}"
-        print(f"\n[!] {error_msg}")
-        send_telegram_message(f"⚠️ <b>Critical Error</b>\n{error_msg}")
-    finally:
-        server.close()
+            # Print server info
+            print("\n" + "="*50)
+            print("  REMOTE MONITORING SERVER (Railway)")
+            print("="*50)
+            print(f"\n[+] Server Host: {HOST}")
+            print(f"[+] Port: {PORT}")
+            print(f"[+] Auth Method: JSON")
+            print(f"[+] Telegram Logging: {'Enabled' if TELEGRAM_BOT_TOKEN else 'Disabled'}")
+            print(f"[+] Allowed Commands: {', '.join(ALLOWED_COMMANDS)}")
+            
+            # Test users.json
+            users = load_users()
+            print(f"[+] Available users: {', '.join(users.keys())}")
+            print("="*50)
+            
+            # Create socket
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind((HOST, PORT))
+            server.listen(5)
+            
+            print(f"\n[✓] Server listening on {HOST}:{PORT}")
+            print("[✓] Waiting for client connections...\n")
+            print("[!] Press Ctrl+C to stop the server\n")
+            
+            # Main loop
+            while True:
+                try:
+                    client, addr = server.accept()
+                    print(f"[+] Connection from {addr}")
+                    
+                    # Handle client in new thread
+                    client_thread = threading.Thread(
+                        target=handle_client,
+                        args=(client, addr),
+                        daemon=True
+                    )
+                    client_thread.start()
+                except Exception as e:
+                    print(f"[!] Error accepting connection: {e}")
+                    continue
+        
+        except Exception as e:
+            print(f"\n[!] Server error on attempt {attempt + 1}: {e}")
+            if attempt < max_retries - 1:
+                print(f"[!] Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                print("[!] Max retries reached. Exiting...")
+                send_telegram_message(f"⚠️ <b>Server Failed to Start</b>\n{str(e)}")
+                sys.exit(1)
 
 if __name__ == "__main__":
     start_server()
