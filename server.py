@@ -8,16 +8,69 @@ import sys
 import subprocess
 import threading
 import requests
+import json
 from datetime import datetime
-from auth import authenticate, hash_password
-from config import DEBUG_MODE, ALLOWED_COMMANDS, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 # Add server directory to path for users.json
 sys.path.append(os.path.join(os.path.dirname(__file__), 'server'))
 
+# Configuration
+DEBUG_MODE = True
+ALLOWED_COMMANDS = ["whoami", "hostname", "ipconfig", "systeminfo", "tasklist", "netstat", "uname", "ps aux"]
+AUTH_METHOD = "json"  # Use JSON auth on Railway (Linux)
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+
 # Railway provides PORT environment variable
 PORT = int(os.environ.get('PORT', 5000))
-HOST = '0.0.0.0'  # Listen on all interfaces for Railway
+HOST = '0.0.0.0'
+
+def hash_password(password):
+    """Hash password with SHA256"""
+    import hashlib
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def load_users():
+    """Load users from JSON file"""
+    try:
+        users_path = os.path.join(os.path.dirname(__file__), 'server', 'users.json')
+        with open(users_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[!] Error loading users: {e}")
+        return {}
+
+def authenticate_json(username, password):
+    """JSON authentication"""
+    users = load_users()
+    hashed = hash_password(password)
+    
+    if DEBUG_MODE:
+        print(f"[Debug] JSON Auth - Checking '{username}'")
+        print(f"[Debug] Stored hash: {users.get(username, 'Not found')}")
+        print(f"[Debug] Input hash: {hashed}")
+    
+    return username in users and users[username] == hashed
+
+def authenticate(username, password):
+    """Main authentication function"""
+    if DEBUG_MODE:
+        print("\n" + "="*50)
+        print(f"[Debug] Authentication Attempt")
+        print(f"[Debug] Username: '{username}'")
+        print(f"[Debug] Auth Method: {AUTH_METHOD}")
+        print("="*50)
+    
+    # Use JSON authentication
+    if authenticate_json(username, password):
+        if DEBUG_MODE:
+            print("[Debug] ✅ SUCCESS - JSON authentication")
+        return True
+    
+    if DEBUG_MODE:
+        print("[Debug] ❌ FAILED - Authentication failed")
+    
+    return False
 
 def send_telegram_message(message):
     """Send message to Telegram"""
@@ -120,7 +173,7 @@ def handle_client(client, addr):
             print(system_info)
             print("="*50)
             
-            # Get command from admin
+            # Get command from admin via console
             print("\n" + "="*50)
             print("[AVAILABLE COMMANDS]")
             print(f"Allowed: {', '.join(ALLOWED_COMMANDS)}")
@@ -169,23 +222,19 @@ def start_server():
 🌐 Host: {HOST}
 🔌 Port: {PORT}
 📊 Status: Online
+🔐 Auth: JSON (Username/Password)
         """
         send_telegram_message(start_msg)
         
         # Get system info
-        try:
-            whoami = subprocess.getoutput('whoami')
-            print("\n" + "="*50)
-            print("  REMOTE MONITORING SERVER (Railway)")
-            print("="*50)
-            print(f"\n[+] System User: {whoami}")
-            print(f"[+] Server Host: {HOST}")
-            print(f"[+] Port: {PORT}")
-            print(f"[+] Auth Method: Windows")
-            print(f"[+] Telegram Logging: {'Enabled' if TELEGRAM_BOT_TOKEN else 'Disabled'}")
-            print("="*50)
-        except:
-            pass
+        print("\n" + "="*50)
+        print("  REMOTE MONITORING SERVER (Railway)")
+        print("="*50)
+        print(f"\n[+] Server Host: {HOST}")
+        print(f"[+] Port: {PORT}")
+        print(f"[+] Auth Method: JSON")
+        print(f"[+] Telegram Logging: {'Enabled' if TELEGRAM_BOT_TOKEN else 'Disabled'}")
+        print("="*50)
         
         # Create socket
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

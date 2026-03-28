@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+.git
+.gitignore
+README.md
+*.bat
+*.log
+.env
+server/logs.txt
+client/
+dist/
