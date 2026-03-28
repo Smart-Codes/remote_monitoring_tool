@@ -21,11 +21,12 @@ AUTH_METHOD = "json"
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
-# Railway provides PORT environment variable
-PORT = int(os.environ.get('PORT', 5000))
+# Railway provides PORT for HTTP healthcheck (MUST listen here)
+HTTP_PORT = int(os.environ.get('PORT', 5000))
+# Separate TCP port for client connections (add TCP_PORT=5001 in Railway variables)
+TCP_PORT = int(os.environ.get('TCP_PORT', 5001))
+
 HOST = '0.0.0.0'
-TCP_PORT = PORT  # TCP port for client connections
-HTTP_PORT = PORT  # Use same port for HTTP (Railway will route to this)
 
 def hash_password(password):
     """Hash password with SHA256"""
@@ -265,62 +266,9 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         """Handle GET requests"""
         if self.path == '/' or self.path == '/health':
             self.send_response(200)
-            self.send_header('Content-type', 'text/html')
+            self.send_header('Content-type', 'text/plain')
             self.end_headers()
-            
-            status_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Remote Monitoring Server</title>
-                <style>
-                    body {{
-                        font-family: Arial, sans-serif;
-                        margin: 40px;
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        color: white;
-                    }}
-                    .container {{
-                        max-width: 800px;
-                        margin: auto;
-                        background: rgba(255,255,255,0.1);
-                        padding: 20px;
-                        border-radius: 10px;
-                    }}
-                    .status {{
-                        color: #4ade80;
-                        font-weight: bold;
-                    }}
-                    .info {{
-                        margin: 20px 0;
-                        padding: 10px;
-                        background: rgba(255,255,255,0.2);
-                        border-radius: 5px;
-                    }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h1>🚀 Remote Monitoring Server</h1>
-                    <p>Status: <span class="status">🟢 ONLINE</span></p>
-                    <div class="info">
-                        <h3>Server Information:</h3>
-                        <p>📡 TCP Port: {TCP_PORT}</p>
-                        <p>🔐 Auth Method: JSON</p>
-                        <p>📊 Status: Running</p>
-                        <p>🤖 Telegram Logging: {'✅ Enabled' if TELEGRAM_BOT_TOKEN else '❌ Disabled'}</p>
-                    </div>
-                    <div class="info">
-                        <h3>How to Connect:</h3>
-                        <p>Use a TCP client to connect to this server on port {TCP_PORT}</p>
-                        <p>Credentials: Use admin/admin123 or user/password123</p>
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-            
-            self.wfile.write(status_html.encode())
+            self.wfile.write(f"OK - Remote Monitoring Server is running\nHTTP Port: {HTTP_PORT}\nTCP Port: {TCP_PORT}".encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -390,8 +338,8 @@ def start_server():
 ━━━━━━━━━━━━━━━━━━━━━━━
 🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 🌐 Host: {HOST}
-🔌 HTTP Port: {HTTP_PORT}
-🔌 TCP Port: {TCP_PORT}
+🔌 HTTP Port (Healthcheck): {HTTP_PORT}
+🔌 TCP Port (Clients): {TCP_PORT}
 📊 Status: Online
 🔐 Auth: JSON
         """
@@ -402,7 +350,7 @@ def start_server():
         print("  REMOTE MONITORING SERVER (Railway)")
         print("="*50)
         print(f"\n[+] Server Host: {HOST}")
-        print(f"[+] HTTP Port: {HTTP_PORT} (for health checks)")
+        print(f"[+] HTTP Port: {HTTP_PORT} (for Railway health checks)")
         print(f"[+] TCP Port: {TCP_PORT} (for client connections)")
         print(f"[+] Auth Method: JSON")
         print(f"[+] Telegram Logging: {'Enabled' if TELEGRAM_BOT_TOKEN else 'Disabled'}")
@@ -414,7 +362,7 @@ def start_server():
         print("="*50)
         print("\n[✓] Server is running!\n")
         
-        # Start HTTP server in a separate thread
+        # Start HTTP server in a separate thread (Railway healthcheck)
         http_thread = threading.Thread(target=run_http_server, daemon=True)
         http_thread.start()
         
