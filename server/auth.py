@@ -1,11 +1,10 @@
 """
-Authentication Module - Works with Windows credentials
+Authentication Module - Fixed for usernames with spaces
 """
 
 import json
 import hashlib
 import subprocess
-import os
 from config import AUTH_METHOD, DEBUG_MODE
 
 def hash_password(password):
@@ -21,12 +20,14 @@ def load_users():
 def authenticate_windows(username, password):
     """Windows authentication that works with usernames containing spaces"""
     try:
+        # Clean username - preserve spaces
         username = username.strip()
         
         if DEBUG_MODE:
             print(f"\n[Debug] Windows Auth - Testing: '{username}'")
         
-        # PowerShell script for Windows authentication
+        # PowerShell script with proper handling of spaces
+        # Use single quotes around username and password to handle spaces
         ps_script = f'''
         Add-Type -AssemblyName System.DirectoryServices.AccountManagement
         $context = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Machine)
@@ -38,8 +39,7 @@ def authenticate_windows(username, password):
             ['powershell', '-Command', ps_script],
             capture_output=True,
             text=True,
-            timeout=10,
-            shell=True
+            timeout=10
         )
         
         if DEBUG_MODE:

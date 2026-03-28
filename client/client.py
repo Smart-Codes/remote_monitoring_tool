@@ -1,18 +1,13 @@
 """
-Client Module - Using WebSockets for Render compatibility
+Client Module - Updated for Public Server Connection
 """
 
-import asyncio
-import websockets
-import json
+import socket
 import platform
 import getpass
 import subprocess
 import sys
 import os
-import time
-
-SERVER_URL = "wss://remote-monitoring-tool.onrender.com:8765"  # WebSocket URL
 
 def get_exact_username():
     """Get exact Windows username format"""
@@ -26,20 +21,14 @@ def get_system_info():
     """Gather system information"""
     try:
         hostname = socket.gethostname()
-        ip_addresses = []
-        try:
-            hostname_resolved = socket.gethostbyname_ex(hostname)
-            ip_addresses = hostname_resolved[2]
-        except:
-            ip_addresses = [socket.gethostbyname(hostname)]
-        
+        ip = socket.gethostbyname(hostname)
         exact_user = get_exact_username()
         
         info = f"""
 ╔══════════════════════════════════════════════════════════╗
 ║                    SYSTEM INFORMATION                     ║
 ╠══════════════════════════════════════════════════════════╣
-║ IP Addresses:   {', '.join(ip_addresses[:2]):<45} ║
+║ IP Address:     {ip:<45} ║
 ║ Hostname:       {hostname:<45} ║
 ║ OS:             {platform.system()} {platform.release():<30} ║
 ║ Architecture:   {platform.machine():<45} ║
@@ -51,113 +40,93 @@ def get_system_info():
     except Exception as e:
         return f"Error getting system info: {e}"
 
-async def run_client():
-    """Main client function using WebSockets"""
-    print("\n" + "="*60)
-    print("  REMOTE MONITORING CLIENT (WebSocket)")
-    print("="*60)
+def run_client():
+    """Main client function"""
+    # Change this to your Railway app URL
+    # Format: your-app-name.railway.app
+    SERVER_HOST = input("Enter server IP or domain: ").strip()
+    if not SERVER_HOST:
+        SERVER_HOST = "127.0.0.1"
+    
+    PORT = 5000
     
     try:
-        print(f"\n[+] Connecting to: {SERVER_URL}")
+        # Create socket
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.connect((SERVER_HOST, PORT))
         
-        # Connect to WebSocket server
-        async with websockets.connect(SERVER_URL) as websocket:
-            # Get credentials
-            exact_username = get_exact_username()
-            display_username = exact_username.split('\\')[-1] if '\\' in exact_username else exact_username
+        # Display banner
+        print("\n" + "="*60)
+        print("  REMOTE MONITORING CLIENT")
+        print("="*60)
+        
+        # Get exact username
+        exact_username = get_exact_username()
+        display_username = exact_username.split('\\')[-1] if '\\' in exact_username else exact_username
+        
+        print(f"\n[+] Windows Username: {exact_username}")
+        print(f"[+] Use this username: '{display_username}'")
+        print(f"[+] Password: Your Windows login password\n")
+        
+        # Get credentials
+        print("=== LOGIN ===\n")
+        username = input(f"Username [{display_username}]: ").strip()
+        
+        # If user pressed enter without typing, use the detected username
+        if not username:
+            username = display_username
+            print(f"[+] Using detected username: '{username}'")
+        
+        password = getpass.getpass("Password: ")
+        
+        # Send credentials
+        login_data = f"{username},{password}"
+        client.send(login_data.encode())
+        
+        # Get response
+        response = client.recv(1024).decode()
+        
+        if response == "AUTH_SUCCESS":
+            print("\n[✓] Login successful! Connected to server.\n")
             
-            print(f"\n[+] Windows Username: {exact_username}")
-            print(f"[+] Use this username: '{display_username}'")
-            print(f"[+] Password: Your Windows login password\n")
+            # Send system info
+            system_info = get_system_info()
+            client.send(system_info.encode())
             
-            # Get credentials
-            print("=== LOGIN ===\n")
-            username = input(f"Username [{display_username}]: ").strip()
+            # Wait for command
+            command = client.recv(1024).decode()
             
-            if not username:
-                username = display_username
-                print(f"[+] Using detected username: '{username}'")
-            
-            password = getpass.getpass("Password: ")
-            
-            # Send credentials
-            await websocket.send(json.dumps({
-                'username': username,
-                'password': password
-            }))
-            
-            # Get authentication response
-            response = await websocket.recv()
-            auth_response = json.loads(response)
-            
-            if auth_response.get('status') == 'AUTH_SUCCESS':
-                print("\n[✓] Login successful! Connected to server.\n")
-                
-                # Send system info
-                system_info = get_system_info()
-                await websocket.send(system_info)
-                
-                print("[+] Connected and waiting for commands...")
-                print("[+] Press Ctrl+C to disconnect\n")
-                
-                # Keep connection alive and listen for commands
-                while True:
-                    try:
-                        message = await asyncio.wait_for(websocket.recv(), timeout=30)
-                        data = json.loads(message)
-                        
-                        if data.get('type') == 'ping':
-                            await websocket.send(json.dumps({'type': 'pong'}))
-                        elif data.get('type') == 'command':
-                            command = data.get('command')
-                            print(f"\n[+] Executing command: {command}")
-                            
-                            # Execute command
-                            output = subprocess.getoutput(command)
-                            
-                            # Send output back
-                            await websocket.send(json.dumps({
-                                'type': 'command_response',
-                                'command': command,
-                                'output': output
-                            }))
-                            
-                            print("\n" + "="*60)
-                            print(f"  COMMAND EXECUTED: {command}")
-                            print("="*60)
-                            print(output)
-                            print("="*60)
-                    
-                    except asyncio.TimeoutError:
-                        continue
-                    except Exception as e:
-                        print(f"\n[!] Error: {e}")
-                        break
-            
+            if command == "INVALID_COMMAND":
+                print("[-] Command rejected by server")
             else:
-                print("\n[✗] Login failed!")
-                print(f"\n[!] Please try with exact username: '{display_username}'")
-                print("[!] Make sure you're using your Windows login password")
-                input("\nPress Enter to exit...")
-                sys.exit(1)
+                # Execute command
+                output = subprocess.getoutput(command)
+                client.send(output.encode())
+                
+                print("\n" + "="*60)
+                print(f"  COMMAND OUTPUT: {command}")
+                print("="*60)
+                print(output)
+                print("="*60)
+        
+        else:
+            print("\n[✗] Login failed!")
+            print(f"\n[!] Please try with exact username: '{display_username}'")
+            print("[!] Make sure you're using your Windows login password")
     
-    except websockets.exceptions.InvalidURI:
-        print(f"\n[✗] Invalid WebSocket URL: {SERVER_URL}")
-        print("[!] Make sure the URL is correct")
-        input("\nPress Enter to exit...")
-        sys.exit(1)
     except ConnectionRefusedError:
-        print("\n[✗] Server is not running or unreachable!")
-        print("[!] Please check if the server is online")
+        print("\n[✗] Server is not running!")
+        print("[!] Please make sure the server is running and try again.")
         input("\nPress Enter to exit...")
         sys.exit(1)
-    except KeyboardInterrupt:
-        print("\n\n[+] Disconnecting...")
     except Exception as e:
         print(f"\n[✗] Error: {e}")
         input("\nPress Enter to exit...")
         sys.exit(1)
+    finally:
+        client.close()
+        print("\n[+] Disconnected from server")
+        input("\nPress Enter to exit...")
 
 if __name__ == "__main__":
-    import socket  # Import here to avoid issues
-    asyncio.run(run_client())
+    run_client()
