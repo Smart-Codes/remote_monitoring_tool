@@ -9,3 +9,17 @@ README.md
 server/logs.txt
 client/
 dist/
+.DS_Store
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.venv
+venv
+ENV
+env

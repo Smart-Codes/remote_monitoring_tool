@@ -5,19 +5,17 @@ Main Server Module - Optimized for Railway with Telegram Logging
 import socket
 import os
 import sys
-import subprocess
 import threading
 import requests
 import json
+import hashlib
+import subprocess
 from datetime import datetime
-
-# Add server directory to path for users.json
-sys.path.append(os.path.join(os.path.dirname(__file__), 'server'))
 
 # Configuration
 DEBUG_MODE = True
-ALLOWED_COMMANDS = ["whoami", "hostname", "ipconfig", "systeminfo", "tasklist", "netstat", "uname", "ps aux"]
-AUTH_METHOD = "json"  # Use JSON auth on Railway (Linux)
+ALLOWED_COMMANDS = ["whoami", "hostname", "ipconfig", "systeminfo", "tasklist", "netstat", "uname", "ps aux", "echo"]
+AUTH_METHOD = "json"
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
@@ -27,15 +25,27 @@ HOST = '0.0.0.0'
 
 def hash_password(password):
     """Hash password with SHA256"""
-    import hashlib
     return hashlib.sha256(password.encode()).hexdigest()
 
 def load_users():
     """Load users from JSON file"""
     try:
+        # Look for users.json in server directory
         users_path = os.path.join(os.path.dirname(__file__), 'server', 'users.json')
-        with open(users_path, "r") as f:
-            return json.load(f)
+        if os.path.exists(users_path):
+            with open(users_path, "r") as f:
+                return json.load(f)
+        else:
+            # Create default users.json if it doesn't exist
+            default_users = {
+                "admin": hash_password("admin123"),
+                "user": hash_password("password123")
+            }
+            os.makedirs(os.path.dirname(users_path), exist_ok=True)
+            with open(users_path, "w") as f:
+                json.dump(default_users, f, indent=2)
+            print("[✓] Created default users.json with admin/admin123 and user/password123")
+            return default_users
     except Exception as e:
         print(f"[!] Error loading users: {e}")
         return {}
@@ -47,7 +57,6 @@ def authenticate_json(username, password):
     
     if DEBUG_MODE:
         print(f"[Debug] JSON Auth - Checking '{username}'")
-        print(f"[Debug] Stored hash: {users.get(username, 'Not found')}")
         print(f"[Debug] Input hash: {hashed}")
     
     return username in users and users[username] == hashed
